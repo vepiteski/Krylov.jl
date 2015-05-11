@@ -89,7 +89,7 @@ function cg_lanczos{T <: Real}(A :: LinearOperator, b :: Array{T,1};
   end
 
   status = tired ? "maximum number of iterations exceeded" : "solution good enough given atol and rtol"
-  stats = LanczosStats(solved, rNorms, sqrt(Anorm2), 0.0, status);  # TODO: Estimate Acond.
+  stats = LanczosStats(solved, rNorms, false, sqrt(Anorm2), 0.0, status);  # TODO: Estimate Acond.
   return (x, stats);
 end
 
@@ -104,7 +104,7 @@ The method does _not_ abort if A + αI is not definite.
 """ ->
 function cg_lanczos_shift_seq{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: Array{Tb,1}, shifts :: Array{Ts,1};
                                                       atol :: Float64=1.0e-8, rtol :: Float64=1.0e-6, itmax :: Int=0,
-                                                      verbose :: Bool=false)
+                                                      check_curvature :: Bool=false, verbose :: Bool=false)
 
   n = size(b, 1);
   (size(A, 1) == n & size(A, 2) == n) || error("Inconsistent problem size");
@@ -118,6 +118,7 @@ function cg_lanczos_shift_seq{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: 
   β == 0 && return x;
   v = b / β;
   v_prev = copy(v);
+  β_prev = β;
 
   # Initialize each p to b.
   p = b * ones(nshifts)';
@@ -137,6 +138,9 @@ function cg_lanczos_shift_seq{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: 
   converged = rNorms .<= ε;
   iter = 0;
   itmax == 0 && (itmax = 2 * n);
+
+  # Keep track of shifted systems with negative curvature if required.
+  indefinite = falses(nshifts);
 
   # Build format strings for printing.
   if verbose
@@ -161,12 +165,17 @@ function cg_lanczos_shift_seq{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: 
     β = norm(v_next);
     v = v_next / β;
 
-    # Compute next CG iterate for each shift.
-    not_cv = find(! converged);
+    # Check curvature: v'(A + sᵢI)v = v'Av + sᵢ ‖v‖² = δ + sᵢ β_prev².
+    indefinite |= (δ + shifts * β_prev * β_prev .<= 0.0);
+
+    # Compute next CG iterate for each shifted system that has not yet converged.
+    # Stop iterating on indefinite problems if requested.
+    not_cv = check_curvature ? find(! (converged | indefinite)) : find(! converged);
 
     # Loop is a bit faster than the vectorized version.
     for i in not_cv
       δhat[i] = δ + shifts[i];
+
       γ[i] = 1 ./ (δhat[i] - ω[i] ./ γ[i]);
       x[:, i] += γ[i] * p[:, i];  # Strangely, this is faster than a loop.
 
@@ -180,21 +189,17 @@ function cg_lanczos_shift_seq{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: 
       converged[i] = rNorms[i] <= ε;
     end
 
-    # Can't seem to use BLAS3 GEMM calls here.
-    #       BLAS.gemm!('N', 'N', 1.0, p[:,not_cv], diagm(γ[not_cv]), 1.0, x[:,not_cv]);
-    #       p[:,not_cv] *= diagm(ω[not_cv]);
-    #       BLAS.gemm!('N', 'T', 1.0, v, σ[not_cv], 1.0, p[:,not_cv]);
-
     append!(rNorms_history, rNorms);
     iter = iter + 1;
+    β_prev = β;
     verbose && c_printf(fmt, iter, rNorms...);
 
-    solved = all(converged);
+    solved = length(not_cv) == 0;
     tired = iter >= itmax;
   end
 
   status = tired ? "maximum number of iterations exceeded" : "solution good enough given atol and rtol"
-  stats = LanczosStats(solved, reshape(rNorms_history, nshifts, iter+1)', 0.0, 0.0, status);  # TODO: Estimate Anorm and Acond.
+  stats = LanczosStats(solved, reshape(rNorms_history, nshifts, iter+1)', indefinite, 0.0, 0.0, status);  # TODO: Estimate Anorm and Acond.
   return (x, stats);
 end
 
@@ -328,6 +333,6 @@ function cg_lanczos_shift_par{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: 
   end
 
   status = tired ? "maximum number of iterations exceeded" : "solution good enough given atol and rtol"
-  stats = LanczosStats(solved, drNorm, 0.0, 0.0, status);
+  stats = LanczosStats(solved, drNorm, falses(nshifts), 0.0, 0.0, status);
   return (dx, stats);
 end
