@@ -25,7 +25,7 @@ end
 type LanczosStats <: KrylovStats
   solved :: Bool
   residuals :: Union(Array{Float64}, DArray{Float64,1,Array{Float64,1}})
-  flagged :: Union(Bool, BitArray{1})
+  flagged :: Union(Bool, BitArray{1}, DArray{Bool,1,Array{Bool,1}})
   Anorm :: Float64
   Acond :: Float64
   status :: UTF8String

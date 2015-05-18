@@ -222,7 +222,7 @@ and operations specific to each shift is carried out on the processor hosting it
 """ ->
 function cg_lanczos_shift_par{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: Array{Tb,1}, shifts :: Array{Ts,1};
                                                       atol :: Float64=1.0e-8, rtol :: Float64=1.0e-6, itmax :: Int=0,
-                                                      verbose :: Bool=false)
+                                                      check_curvature :: Bool=false, verbose :: Bool=false)
 
   n = size(b, 1);
   (size(A, 1) == n & size(A, 2) == n) || error("Inconsistent problem size");
@@ -237,6 +237,7 @@ function cg_lanczos_shift_par{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: 
   β = norm(b);
   β == 0 && return convert(Array, dx);
   v = b / β;
+  β_prev = β;
   v_prev = v;
 
   # Distribute p similarly to shifts.
@@ -252,7 +253,9 @@ function cg_lanczos_shift_par{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: 
   end
 
   # Keep track of shifted systems that have converged.
+  dsolved = dfill(false, (nshifts,), workers(), [nchunks]);
   dconverged = dfill(false, (nshifts,), workers(), [nchunks]);
+  dindefinite= dfill(false, (nshifts,), workers(), [nchunks]);
   iter = 0;
   itmax == 0 && (itmax = 2 * n);
 
@@ -273,7 +276,7 @@ function cg_lanczos_shift_par{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: 
     c_printf(fmt, iter, drNorm...);
   end
 
-  solved = preduce(&, dconverged);
+  solved = false;
   tired = iter >= itmax;
   status = "unknown";
 
@@ -293,22 +296,28 @@ function cg_lanczos_shift_par{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: 
     # Compute next CG iterate for each shift.
     @sync for proc in procs(dp)
       @spawnat proc begin
+        solved_loc = localpart(dsolved);
         converged_loc = localpart(dconverged);
-        not_cv = find(! converged_loc);
+        indefinite_loc = localpart(dindefinite);
+        shifts_loc = localpart(dshifts);
+
         rNorm_loc = localpart(drNorm);
         #         rNorms_loc = localpart(drNorms);
 
-        if ! all(converged_loc)
+        # Check curvature: v'(A + sᵢI)v = v'Av + sᵢ ‖v‖² = δ + sᵢ β_prev².
+        # Stop iterating on indefinite problems if requested.
+        indefinite_loc[:] |= (δ + shifts_loc * β_prev * β_prev .<= 0.0);
+        not_cv = check_curvature ? find(! (converged_loc | indefinite_loc)) : find(! converged_loc);
 
-          # Fetch parts of relevant arrays for which
-          # the residual has not yet converged.
+        if length(not_cv) > 0
+          # Fetch parts of relevant arrays for which the residual has not yet converged.
           σ_loc = localpart(dσ);
           δ_loc = localpart(dδ);
           γ_loc = localpart(dγ);
           ω_loc = localpart(dω);
           x_loc = localpart(dx);
           p_loc = localpart(dp);
-          shifts_loc = localpart(dshifts); shifts_loc = shifts_loc[not_cv];
+          shifts_loc = shifts_loc[not_cv];
 
           δ_loc[not_cv] = δ + shifts_loc;
           γ_loc[not_cv] = 1 ./ (δ_loc[not_cv] - ω_loc[not_cv] ./ γ_loc[not_cv]);
@@ -325,19 +334,19 @@ function cg_lanczos_shift_par{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: 
           converged_loc[not_cv] = rNorm_loc[not_cv] .<= ε;
         end
 
-        # It currently doesn't seem possible to do this with distributed arrays.
-        #         append!(rNorms_loc, rNorm_loc);
+        solved_loc[:] = converged_loc | indefinite_loc;
       end
     end
 
     iter = iter + 1;
+    β_prev = β;
     verbose && c_printf(fmt, iter, drNorm...);
 
-    solved = preduce(&, dconverged);
+    solved = preduce(&, dsolved);
     tired = iter >= itmax;
   end
 
   status = tired ? "maximum number of iterations exceeded" : "solution good enough given atol and rtol"
-  stats = LanczosStats(solved, drNorm, falses(nshifts), 0.0, 0.0, status);
+  stats = LanczosStats(solved, drNorm, dindefinite, 0.0, 0.0, status);
   return (dx, stats);
 end
