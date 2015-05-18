@@ -24,7 +24,7 @@ The method does _not_ abort if A is not definite.
 """ ->
 function cg_lanczos{T <: Real}(A :: LinearOperator, b :: Array{T,1};
                                atol :: Float64=1.0e-8, rtol :: Float64=1.0e-6, itmax :: Int=0,
-                               verbose :: Bool=false)
+                               check_curvature :: Bool=False, verbose :: Bool=false)
 
   n = size(b, 1);
   (size(A, 1) == n & size(A, 2) == n) || error("Inconsistent problem size");
@@ -52,12 +52,13 @@ function cg_lanczos{T <: Real}(A :: LinearOperator, b :: Array{T,1};
   ε = atol + rtol * rNorm;
   verbose && @printf("%5d  %8.1e\n", iter, rNorm);
 
+  indefinite = false;
   solved = rNorm <= ε;
   tired = iter >= itmax;
   status = "unknown";
 
   # Main loop.
-  while ! (solved || tired)
+  while ! (solved || tired || indefinite)
     # Form next Lanczos vector.
     v_next = A * v;
     δ = dot(v, v_next);  # BLAS.dot(n, v, 1, v_next, 1) doesn't seem to pay off.
@@ -70,6 +71,10 @@ function cg_lanczos{T <: Real}(A :: LinearOperator, b :: Array{T,1};
     v = v_next / β;
     Anorm2 += β_prev^2 + β^2 + δ^2;  # Use ‖T‖ as increasing approximation of ‖A‖.
     β_prev = β;
+
+    # Check curvature. Exit fast if requested.
+    indefinite |= (δ <= 0.0);
+    check_curvature && continue;
 
     # Compute next CG iterate.
     γ = 1 / (δ - ω / γ);
@@ -89,7 +94,7 @@ function cg_lanczos{T <: Real}(A :: LinearOperator, b :: Array{T,1};
   end
 
   status = tired ? "maximum number of iterations exceeded" : "solution good enough given atol and rtol"
-  stats = LanczosStats(solved, rNorms, false, sqrt(Anorm2), 0.0, status);  # TODO: Estimate Acond.
+  stats = LanczosStats(solved, rNorms, indefinite, sqrt(Anorm2), 0.0, status);  # TODO: Estimate Acond.
   return (x, stats);
 end
 
