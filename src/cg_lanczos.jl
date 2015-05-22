@@ -239,7 +239,6 @@ function cg_lanczos_shift_par{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: 
   β = norm(b);
   β == 0 && return convert(Array, dx);
   v = b / β;
-  β_prev = β;
   v_prev = v;
 
   # Distribute p similarly to shifts.
@@ -306,9 +305,9 @@ function cg_lanczos_shift_par{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: 
         rNorm_loc = localpart(drNorm);
         #         rNorms_loc = localpart(drNorms);
 
-        # Check curvature: v'(A + sᵢI)v = v'Av + sᵢ ‖v‖² = δ + sᵢ β_prev².
+        # Check curvature: v'(A + sᵢI)v = v'Av + sᵢ ‖v‖² = δ + sᵢ because ‖v‖ = 1.
         # Stop iterating on indefinite problems if requested.
-        indefinite_loc[:] |= (δ + shifts_loc * β_prev * β_prev .<= 0.0);
+        indefinite_loc[:] |= (δ + shifts_loc .<= 0.0);
         not_cv = check_curvature ? find(! (converged_loc | indefinite_loc)) : find(! converged_loc);
 
         if length(not_cv) > 0
@@ -341,7 +340,6 @@ function cg_lanczos_shift_par{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: 
     end
 
     iter = iter + 1;
-    β_prev = β;
     verbose && c_printf(fmt, iter, drNorm...);
 
     solved = preduce(&, dsolved);
