@@ -124,7 +124,6 @@ function cg_lanczos_shift_seq{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: 
   β == 0 && return x;
   v = b / β;
   v_prev = copy(v);
-  β_prev = β;
 
   # Initialize each p to b.
   p = b * ones(nshifts)';
@@ -200,7 +199,6 @@ function cg_lanczos_shift_seq{Tb <: Real, Ts <: Real}(A :: LinearOperator, b :: 
 
     length(not_cv) > 0 && append!(rNorms_history, rNorms);
     iter = iter + 1;
-    β_prev = β;
     verbose && c_printf(fmt, iter, rNorms...);
 
     solved = length(not_cv) == 0;
