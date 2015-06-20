@@ -24,7 +24,7 @@ The method does _not_ abort if A is not definite.
 """ ->
 function cg_lanczos{T <: Real}(A :: LinearOperator, b :: Array{T,1};
                                atol :: Float64=1.0e-8, rtol :: Float64=1.0e-6, itmax :: Int=0,
-                               check_curvature :: Bool=False, verbose :: Bool=false)
+                               check_curvature :: Bool=false, verbose :: Bool=false)
 
   n = size(b, 1);
   (size(A, 1) == n & size(A, 2) == n) || error("Inconsistent problem size");
